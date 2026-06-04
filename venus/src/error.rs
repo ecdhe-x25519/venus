@@ -1,5 +1,8 @@
+#[derive(Debug)]
 pub enum Error {
-    ListeningError,
-    ConnectionError,
-    HandleConnectionError,
+    Std(String),
+    Tls(String),
+    Http(String),
+    Timeout(String),
+    ConnectionClosed,
 }
