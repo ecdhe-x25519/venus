@@ -1,0 +1,8 @@
+TCP:
+
+Conn as a client: new connection -> conn.methods;
+
+Server: listener -> handle loop -> new TcpConnection -> TcpConnection handle loop conn.methods;
+
+UDP:
+

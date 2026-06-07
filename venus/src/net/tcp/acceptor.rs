@@ -3,41 +3,46 @@ use std::sync::Arc;
 use crate::protocols::tcp::configs::*;
 use crate::protocols::tcp::connection::*;
 
-use crate::error::Error;
+use crate::error::TcpError;
 
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 
 pub struct TcpServer {
-    pub config: TcpServerConfig,
-    pub listener: TcpListener,
+    config: TcpServerConfig,
+    listener: TcpListener,
+    semaphore: Arc<Semaphore>,
 }
 
 impl TcpServer {
-    pub async fn bind(config: TcpServerConfig) -> Result<Self, Error> {
-        let listener = TcpListener::bind(&config.listen_addr)
+    pub async fn bind(config: TcpServerConfig) -> Result<Self, TcpError> {
+        let listener: TcpListener = TcpListener::bind(&config.listen_addr)
             .await
-            .map_err(|e| Error::Std(format!("bind error: {e}")))?;
+            .map_err(|e| TcpError::Std(format!("bind error: {e}")))?;
+
+        let semaphore: Arc<Semaphore> = Arc::new(Semaphore::new(config.max_conns));
 
         Ok(Self {
             config,
-            listener
+            listener,
+            semaphore,
         })
     }
 
-    pub async fn handle_incoming(&self) -> Result<(), Error> {
-        let semaphore: Arc<Semaphore> = Arc::new(Semaphore::new(self.config.max_conns));
+    pub async fn handle_incoming(&self) -> Result<TcpConnection, TcpError> {
+        self.semaphore.acquire()
+            .await
+            .map_err(|e| TcpError::Std(format!("semaphore acquire error: {e}")))?;
 
-        loop {
-            semaphore.acquire().await.map_err(|e| Error::Std(format!("semaphore error: {e}")))?;
+        let stream = self.listener.accept()
+            .await
+            .map_err(|e| TcpError::Std(format!("connection error: {e}")))?.0;
 
-            let (stream, peer_addr) = self.listener.accept()
-                .await
-                .map_err(|e| Error::Std(format!("connection error: {e}")))?;
+        let conn: TcpConnection = TcpConnection::new(
+            stream,
+            self.config.common.clone()
+        ).await?;
 
-            let conn: TcpConnection = TcpConnection::new(stream, peer_addr.to_string(), &self.config.common)
-                .await
-                .map_err(|e| Error::Std(format!("new connection error: {e}")))?;
-        }
+        Ok(conn)
     }
 }

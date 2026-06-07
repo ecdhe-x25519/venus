@@ -1,20 +1,22 @@
 use crate::protocols::tcp::configs::*;
 use crate::protocols::tcp::connection::*;
 
-use crate::error::Error;
-
 use tokio::net::TcpStream;
+use tokio::time::timeout;
+
+use crate::error::TcpError;
 
 pub struct TcpClient {
-    pub config: TcpClientConfig,
-    pub conn: TcpStream,
+    config: TcpClientConfig,
+    conn: TcpStream,
 }
 
 impl TcpClient {
-    pub async fn bind(config: TcpClientConfig) -> Result<Self, Error> {
-        let conn = TcpStream::connect(&config.dest_addr)
+    pub async fn connect(config: TcpClientConfig) -> Result<Self, TcpError> {
+        let conn: TcpStream = timeout(config.conn_timeout_secs, TcpStream::connect(&config.dest_addr))
             .await
-            .map_err(|e| Error::Std(format!("bind error: {e}")))?;
+            .map_err(|e| TcpError::Timeout(format!("connection timeout, elapsed: {e}")))?
+            .map_err(|e| TcpError::Std(format!("connection error: {e}")))?;
 
         Ok(Self {
             config,
@@ -22,11 +24,12 @@ impl TcpClient {
         })
     }
 
-    pub async fn handle(&self) -> Result<(), Error> {
-        loop {
-            let conn: TcpConnection = TcpConnection::new(self.conn, self.config.dest_addr, &self.config.common)
-                .await
-                .map_err(|e| Error::Std(format!("new connection error: {e}")))?;
-        }
+    pub async fn handle(self) -> Result<TcpConnection, TcpError> {
+        let conn: TcpConnection = TcpConnection::new(
+            self.conn,
+            self.config.common
+        ).await?;
+
+        Ok(conn)
     }
 }
