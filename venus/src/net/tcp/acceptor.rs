@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use crate::protocols::tcp::configs::*;
-use crate::protocols::tcp::connection::*;
-
 use crate::error::TcpError;
 
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
+
+pub use crate::protocols::tcp::connection::TcpConnection;
+pub use crate::protocols::tcp::configs::{TcpServerConfig, TcpCommonConfig};
 
 pub struct TcpServer {
     config: TcpServerConfig,
@@ -30,7 +30,7 @@ impl TcpServer {
     }
 
     pub async fn handle_incoming(&self) -> Result<TcpConnection, TcpError> {
-        self.semaphore.acquire()
+        let _ = self.semaphore.acquire()
             .await
             .map_err(|e| TcpError::Std(format!("semaphore acquire error: {e}")))?;
 

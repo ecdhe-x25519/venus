@@ -1,5 +1,6 @@
 use std::fmt;
 
+#[derive(Debug)]
 pub struct IoError(pub(crate) String);
 
 impl fmt::Display for IoError {
@@ -8,6 +9,7 @@ impl fmt::Display for IoError {
     }
 }
 
+#[derive(Debug)]
 pub enum TcpError {
     Std(String),
     Timeout(String),
@@ -24,6 +26,7 @@ impl fmt::Display for TcpError {
     }
 }
 
+#[derive(Debug)]
 pub enum UdpError {
     Std(String),
     Timeout(String),

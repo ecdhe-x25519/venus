@@ -1,10 +1,10 @@
-use crate::protocols::tcp::configs::*;
-use crate::protocols::tcp::connection::*;
-
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
 use crate::error::TcpError;
+
+pub use crate::protocols::tcp::connection::TcpConnection;
+pub use crate::protocols::tcp::configs::{TcpClientConfig, TcpCommonConfig};
 
 pub struct TcpClient {
     config: TcpClientConfig,

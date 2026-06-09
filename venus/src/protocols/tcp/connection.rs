@@ -8,23 +8,25 @@ use tokio::net::TcpStream;
 
 use tokio::time::{Duration, timeout, interval};
 
-use super::configs::TcpCommonConfig;
+use super::configs::*;
 
 use crate::error::*;
 
 use bytes::*;
 
-pub struct TcpConnection {
-    config: Arc<TcpCommonConfig>,
-    peer_addr: SocketAddr,
+pub struct TcpConnection<S: Side> {
+    config: Arc<S::Config>,
+    _peer_addr: SocketAddr,
     read_buf: BytesMut,
     write_buf: BytesMut,
     read_in: OwnedReadHalf,
     write_out: OwnedWriteHalf,
 }
 
-impl TcpConnection {
-    pub async fn new(stream: TcpStream, config: Arc<TcpCommonConfig>) -> Result<Self, TcpError> {
+impl<S: Side> TcpConnection<S> {
+    pub async fn new(stream: TcpStream, side_config: Arc<S::Config>) -> Result<Self, TcpError> {
+        let config: Arc<TcpCommonConfig> = S::common(side_config.clone());
+
         let peer: &SocketAddr = &stream.peer_addr()
             .map_err(|e| TcpError::Std(format!("get socket addr error: {e}")))?;
 
@@ -33,8 +35,8 @@ impl TcpConnection {
         let capacity: usize = config.buffers_capacity;
 
         Ok(Self {
-            config,
-            peer_addr: *peer,
+            config: side_config,
+            _peer_addr: *peer,
             read_buf: BytesMut::with_capacity(capacity),
             write_buf: BytesMut::with_capacity(capacity),
             read_in,
@@ -45,14 +47,12 @@ impl TcpConnection {
     pub async fn read_frame(&mut self) -> Result<usize, TcpError> {
         let duration: Duration = self.config.idle_timeout_secs;
 
-        let n: Result<usize, TcpError> = timeout(duration, self.read_with_timeout())
+        let n: usize = timeout(duration, self.read_in.read_buf(&mut self.read_buf))
             .await
-            .map_err(|e| TcpError::Timeout(format!("idle timeout, elapsed: {e}")))?;
+            .map_err(|e| TcpError::Timeout(format!("idle timeout, elapsed: {e}")))?
+            .map_err(|e| TcpError::Std(format!("read error: {e}")))?;
 
-        match n {
-            Ok(n) => Ok(n),
-            Err(e) => return Err(TcpError::Std(format!("connection error: {e}")))
-        }
+        Ok(n)
     }
 
     pub async fn write_frame(&mut self, data: &[u8]) -> Result<(), TcpError> {
@@ -113,13 +113,5 @@ impl TcpConnection {
         }
 
         Ok(())
-    }
-
-    async fn read_with_timeout(&mut self) -> Result<usize, TcpError> {
-        let n: usize = self.read_in.read_buf(&mut self.read_buf)
-            .await
-            .map_err(|e| TcpError::Std(format!("read error: {e}")))?;
-
-        Ok(n)
     }
 }

@@ -6,3 +6,8 @@ Server: listener -> handle loop -> new TcpConnection -> TcpConnection handle loo
 
 UDP:
 
+Server: bind -> 
+
+Server with conn mode: bind -> accept connections -> UdpConnection::new() -> handle;
+
+Client: bind -> connect -> handle;

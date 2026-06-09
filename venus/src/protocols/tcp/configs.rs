@@ -5,6 +5,11 @@ use tokio::time::Duration;
 
 use crate::error::IoError;
 
+pub trait Side {
+    type Config;
+    fn common(config: Arc<Self::Config>) -> Arc<TcpCommonConfig>;
+}
+
 #[derive(Debug)]
 pub struct TcpServerConfig {
     pub(crate) common: Arc<TcpCommonConfig>,
@@ -32,6 +37,14 @@ impl TcpServerConfig {
     }
 }
 
+impl Side for TcpServerConfig {
+    type Config = TcpServerConfig;
+
+    fn common(config: Arc<Self::Config>) -> Arc<TcpCommonConfig> {
+        config.common.clone()
+    }
+}
+
 #[derive(Debug)]
 pub struct TcpClientConfig {
     pub(crate) common: Arc<TcpCommonConfig>,
@@ -55,6 +68,14 @@ impl TcpClientConfig {
             dest_addr,
             conn_timeout_secs,
         })
+    }
+}
+
+impl Side for TcpClientConfig {
+    type Config = TcpServerConfig;
+
+    fn common(config: Arc<Self::Config>) -> Arc<TcpCommonConfig> {
+        config.common.clone()
     }
 }
 
