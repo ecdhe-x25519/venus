@@ -5,17 +5,16 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
-
 use tokio::time::{Duration, timeout, interval};
 
-use super::configs::*;
+use super::configs::TcpCommonConfig;
 
 use crate::error::*;
 
 use bytes::*;
 
-pub struct TcpConnection<S: Side> {
-    config: Arc<S::Config>,
+pub struct TcpConnection {
+    config: Arc<TcpCommonConfig>,
     _peer_addr: SocketAddr,
     read_buf: BytesMut,
     write_buf: BytesMut,
@@ -23,19 +22,23 @@ pub struct TcpConnection<S: Side> {
     write_out: OwnedWriteHalf,
 }
 
-impl<S: Side> TcpConnection<S> {
-    pub async fn new(stream: TcpStream, side_config: Arc<S::Config>) -> Result<Self, TcpError> {
-        let config: Arc<TcpCommonConfig> = S::common(side_config.clone());
-
+impl TcpConnection {
+    pub async fn new(stream: TcpStream, config: Arc<TcpCommonConfig>) -> Result<Self, TcpError> {
         let peer: &SocketAddr = &stream.peer_addr()
             .map_err(|e| TcpError::Std(format!("get socket addr error: {e}")))?;
+
+        stream.set_quickack(config.instant_ack)
+            .map_err(|e| TcpError::Std(format!("set quickack error: {e}")))?;
+
+        stream.set_nodelay(config.no_delay)
+            .map_err(|e| TcpError::Std(format!("set nodelay error: {e}")))?;
 
         let (read_in, write_out) = stream.into_split();
 
         let capacity: usize = config.buffers_capacity;
 
         Ok(Self {
-            config: side_config,
+            config,
             _peer_addr: *peer,
             read_buf: BytesMut::with_capacity(capacity),
             write_buf: BytesMut::with_capacity(capacity),
@@ -44,15 +47,23 @@ impl<S: Side> TcpConnection<S> {
         })
     }
 
-    pub async fn read_frame(&mut self) -> Result<usize, TcpError> {
+    pub async fn read_frame(&mut self) -> Result<BytesMut, TcpError> {
         let duration: Duration = self.config.idle_timeout_secs;
 
         let n: usize = timeout(duration, self.read_in.read_buf(&mut self.read_buf))
             .await
-            .map_err(|e| TcpError::Timeout(format!("idle timeout, elapsed: {e}")))?
+            .map_err(|_| TcpError::Timeout(format!("idle timeout")))?
             .map_err(|e| TcpError::Std(format!("read error: {e}")))?;
 
-        Ok(n)
+        n_check(n)?;
+
+        let data = self.read(n);
+
+        Ok(data)
+    }
+
+    fn read(&mut self, len: usize) -> BytesMut {
+        self.read_buf.split_to(len)
     }
 
     pub async fn write_frame(&mut self, data: &[u8]) -> Result<(), TcpError> {
@@ -114,4 +125,12 @@ impl<S: Side> TcpConnection<S> {
 
         Ok(())
     }
+}
+
+pub(crate) fn n_check(n: usize) -> Result<(), TcpError> {
+    if n == 0 {
+        return Err(TcpError::Timeout("timeout".to_string()))
+    }
+
+    Ok(())
 }

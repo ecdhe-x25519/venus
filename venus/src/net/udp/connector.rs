@@ -1,27 +1,27 @@
 use std::sync::Arc;
 
-pub use crate::protocols::udp::configs::{ClientSide, UdpClientConfig, UdpCommonConfig};
+use crate::protocols::udp::configs::UdpClientSide;
+pub use crate::protocols::udp::configs::{UdpClientConfig, UdpCommonConfig};
 pub use crate::protocols::udp::connection::UdpConnection;
 
 use crate::error::UdpError;
 
 pub struct UdpClient {
-    pub(crate) config: Arc<UdpClientConfig>,
-    pub(crate) connection: UdpConnection<ClientSide>,
+    pub(crate) _config: Arc<UdpClientConfig>,
+    pub(crate) connection: UdpConnection<UdpClientSide>,
 }
 
 impl UdpClient {
     pub async fn connect(config: Arc<UdpClientConfig>) -> Result<Self, UdpError> {
-        let mut connection: UdpConnection<ClientSide> = UdpConnection::bind(config.clone()).await?;
-        connection.connect(config.remote_addr).await?;
+        let connection: UdpConnection<UdpClientSide> = UdpConnection::new(config.clone(), Some(config.remote_addr)).await?;
 
         Ok(Self {
-            config,
+            _config: config,
             connection,
         })
     }
 
-    pub async fn handle(&self) -> &UdpConnection<ClientSide> {
-        &self.connection
+    pub fn handle(&mut self) -> &mut UdpConnection<UdpClientSide> {
+        &mut self.connection
     }
 }

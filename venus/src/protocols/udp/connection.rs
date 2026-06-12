@@ -10,129 +10,148 @@ use crate::error::UdpError;
 
 use bytes::*;
 
-pub struct UdpConnection<S: Side> {
+pub struct UdpConnection<S: UdpSide> {
     pub(crate) config: Arc<S::Config>,
-    pub(crate) peer_addr: Option<SocketAddr>,
     pub(crate) socket: Arc<UdpSocket>,
+    pub(crate) peer_addr: Option<SocketAddr>,
     pub(crate) read_buf: BytesMut,
     pub(crate) write_buf: BytesMut,
 }
 
-impl<S: Side> UdpConnection<S> {
-    pub(crate) async fn bind(side_config: Arc<S::Config>) -> Result<Self, UdpError> {
-        let config: Arc<UdpCommonConfig> = S::common(side_config.clone());
+impl<S: UdpSide> UdpConnection<S> {
+    pub(crate) async fn new(config: Arc<S::Config>, peer_addr: Option<SocketAddr>) -> Result<Self, UdpError> {
+        let common = S::common(config.clone());
 
-        let capacity: usize = config.buffers_capacity;
-
-        let socket: UdpSocket = UdpSocket::bind(config.bind_addr)
+        let socket: UdpSocket = UdpSocket::bind(common.bind_addr)
             .await
             .map_err(|e| UdpError::Std(format!("bind error: {e}")))?;
 
-        socket.set_broadcast(config.enable_broadcast)
-            .map_err(|e| UdpError::Std(format!("set broadcast error: {e}")))?;
-
-        socket.bind_device(config.device.as_deref())
+        socket.bind_device(common.device.as_deref())
             .map_err(|e| UdpError::Std(format!("bind device error: {e}")))?;
 
-        let mut peer_addr: Option<SocketAddr> = None;
-        if S::is_client() {
-            peer_addr = Some(config.bind_addr);
+        socket.set_broadcast(common.broadcast)
+            .map_err(|e| UdpError::Std(format!("set broadcast error: {e}")))?;
+
+        if peer_addr.is_some() {
+            socket.connect(peer_addr.unwrap())
+                .await
+                .map_err(|e| UdpError::Std(format!("connect error: {e}")))?;
         }
 
+        let capacity: usize = common.buffers_capacity;
+
         Ok(Self {
-            config: side_config,
-            peer_addr,
+            config,
             socket: Arc::new(socket),
+            peer_addr: peer_addr,
             read_buf: BytesMut::with_capacity(capacity),
             write_buf: BytesMut::with_capacity(capacity),
         })
     }
+
+    fn read_frame(&mut self, len: usize) -> BytesMut {
+        self.read_buf.split_to(len)
+    }
+
+    pub fn write_frame(&mut self, data: &[u8]) {
+        self.write_buf.clear();
+        self.write_buf.put(data)
+    }
 }
 
-impl UdpConnection<ServerSide> {
-    pub(crate) async fn pre_init(&self) -> Result<Vec<Self>, UdpError> {
-        let max_conns: usize = self.config.max_conns.unwrap();
+impl UdpConnection<UdpServerSide> {
+    pub async fn recv(&mut self) -> Result<(BytesMut, SocketAddr), UdpError> {
+        let duration: Duration = self.config.common.recv_timeout_secs;
+        let buf: &mut BytesMut = &mut self.read_buf;
 
-        let mut conns: Vec<UdpConnection<ServerSide>> = Vec::new();
+        let (n, addr) = timeout(duration, self.socket.recv_buf_from(buf))
+            .await
+            .map_err(|_| UdpError::Timeout(format!("recv timeout")))?
+            .map_err(|e| UdpError::Std(format!("recv error: {e}")))?;
 
-        for _ in 0..max_conns {
-            let conn: UdpConnection<ServerSide> = UdpConnection::bind(self.config.clone())
+        n_check(n)?;
+
+        let data = self.read_frame(n);
+
+        println!("{}", self.read_buf.capacity());
+
+        Ok((data, addr))
+    }
+
+    pub async fn accept(&mut self) -> Result<(BytesMut, UdpConnection<UdpServerSide>), UdpError> {
+        let duration: Duration = self.config.common.recv_timeout_secs;
+            let buf: &mut BytesMut = &mut self.read_buf;
+
+            let (n, addr) = timeout(duration, self.socket.recv_from(buf))
                 .await
-                .map_err(|e| UdpError::Std(format!("pre init conn error: {e}")))?;
+                .map_err(|_| UdpError::Timeout(format!("recv_from timeout")))?
+                .map_err(|e| UdpError::Std(format!("recv_from error: {e}")))?;
 
-            conns.push(conn);
+            n_check(n)?;
+
+            let conn: UdpConnection<UdpServerSide> = UdpConnection::new(self.config.clone(), Some(addr)).await?;
+
+            let data = self.read_frame(n);
+
+            Ok((data, conn))
+    }
+
+    pub async fn send(&mut self, peer_addr: Option<SocketAddr>) -> Result<(), UdpError> {
+        let duration: Duration = self.config.common.send_timeout_secs;
+        let buf: &mut BytesMut = &mut self.write_buf;
+
+        let mut addr = self.peer_addr;
+        if self.peer_addr.is_none() && peer_addr.is_some() {
+            addr = peer_addr
         }
 
-        Ok(conns)
-    }
-
-    pub async fn write_buf(&mut self, data: &[u8]) {
-        self.write_buf.put(data);
-    }
-
-    pub async fn send_to(&mut self) -> Result<usize, UdpError> {
-        let duration: Duration = self.config.common.send_timeout_secs;
-        let write_buf: &mut BytesMut = &mut self.write_buf;
-
-        if !self.peer_addr.is_some() { 
-            return Err(UdpError::Std(format!("there is no send addr")))
-        };
-
-        let addr: SocketAddr = self.peer_addr.unwrap();
-
-        let n: usize = timeout(duration, self.socket.send_to(write_buf, addr))
+        let n: usize = timeout(duration, self.socket.send_to(buf, addr.unwrap()))
             .await
-            .map_err(|e| UdpError::Timeout(format!("send, elapsed: {e}")))?
-            .map_err(|e| UdpError::Std(format!("send error: {e}")))?;
+            .map_err(|_| UdpError::Timeout(format!("send_to timeout")))?
+            .map_err(|e| UdpError::Std(format!("send_to error: {e}")))?;
 
-        Ok(n)
-    }
-
-    pub async fn recv_from(&mut self) -> Result<usize, UdpError> {
-        let duration: Duration = self.config.common.recv_timeout_secs;
-        let read_buf: &mut BytesMut = &mut self.read_buf;
-
-        let (n, addr) = timeout(duration, self.socket.recv_from(read_buf))
-            .await
-            .map_err(|e| UdpError::Timeout(format!("recv from, elapsed: {e}")))?
-            .map_err(|e| UdpError::Std(format!("recv from error: {e}")))?;
-
-        self.peer_addr = Some(addr);
-
-        Ok(n)
-    }
-}
-
-impl UdpConnection<ClientSide> {
-    pub async fn connect(&mut self, addr: SocketAddr) -> Result<(), UdpError> {
-        self.socket.connect(addr)
-            .await
-            .map_err(|e| UdpError::Std(format!("connect error: {e}")))?;
+        n_check(n)?;
 
         Ok(())
     }
+}
 
-    pub async fn send(&mut self) -> Result<usize, UdpError> {
+impl UdpConnection<UdpClientSide> {
+    pub async fn recv(&mut self) -> Result<BytesMut, UdpError> {
+        let duration: Duration = self.config.common.recv_timeout_secs;
+        let buf: &mut BytesMut = &mut self.read_buf;
+
+        let n: usize = timeout(duration, self.socket.recv_buf(buf))
+            .await
+            .map_err(|_| UdpError::Timeout(format!("recv timeout")))?
+            .map_err(|e| UdpError::Std(format!("recv error: {e}")))?;
+
+        n_check(n)?;
+
+        let data = self.read_frame(n);
+
+        Ok(data)
+    }
+
+    pub async fn send(&mut self) -> Result<(), UdpError> {
         let duration: Duration = self.config.common.send_timeout_secs;
         let buf: &mut BytesMut = &mut self.write_buf;
 
         let n: usize = timeout(duration, self.socket.send(buf))
             .await
-            .map_err(|e| UdpError::Timeout(format!("send, elapsed: {e}")))?
+            .map_err(|_| UdpError::Timeout(format!("send timeout")))?
             .map_err(|e| UdpError::Std(format!("send error: {e}")))?;
 
-        Ok(n)
+        n_check(n)?;
+
+        Ok(())
+    }
+}
+
+pub(crate) fn n_check(n: usize) -> Result<(), UdpError> {
+    if n == 0 {
+        return Err(UdpError::Timeout("received no bytes".to_string()))
     }
 
-    pub async fn recv(&mut self) -> Result<usize, UdpError> {
-        let duration: Duration = self.config.common.recv_timeout_secs;
-        let buf: &mut BytesMut = &mut self.read_buf;
-
-        let n: usize = timeout(duration, self.socket.recv(buf))
-            .await
-            .map_err(|e| UdpError::Timeout(format!("recv from, elapsed: {e}")))?
-            .map_err(|e| UdpError::Std(format!("recv from error: {e}")))?;
-
-        Ok(n)
-    }
+    Ok(())
 }

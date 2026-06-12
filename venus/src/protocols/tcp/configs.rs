@@ -5,17 +5,11 @@ use tokio::time::Duration;
 
 use crate::error::IoError;
 
-pub trait Side {
-    type Config;
-    fn common(config: Arc<Self::Config>) -> Arc<TcpCommonConfig>;
-}
-
 #[derive(Debug)]
 pub struct TcpServerConfig {
     pub(crate) common: Arc<TcpCommonConfig>,
     pub(crate) max_conns: usize,
     pub(crate) listen_addr: SocketAddr,
-    pub(crate) instant_ack: bool,
 }
 
 impl TcpServerConfig {
@@ -23,25 +17,15 @@ impl TcpServerConfig {
         common: Arc<TcpCommonConfig>,
         max_conns: usize,
         listen_addr: &str,
-        instant_ack: bool,
-    ) -> Result<Self, IoError> {
+    ) -> Result<Arc<Self>, IoError> {
         let listen_addr: SocketAddr = listen_addr.parse()
             .map_err(|e| IoError(format!("incorrect addr: {e}")))?;
 
-        Ok(Self {
+        Ok(Arc::new(Self {
             common,
             max_conns,
             listen_addr,
-            instant_ack,
-        })
-    }
-}
-
-impl Side for TcpServerConfig {
-    type Config = TcpServerConfig;
-
-    fn common(config: Arc<Self::Config>) -> Arc<TcpCommonConfig> {
-        config.common.clone()
+        }))
     }
 }
 
@@ -57,25 +41,17 @@ impl TcpClientConfig {
         common: Arc<TcpCommonConfig>,
         dest_addr: &str,
         conn_timeout_secs: u16,
-    ) -> Result<Self, IoError> {
+    ) -> Result<Arc<Self>, IoError> {
         let dest_addr: SocketAddr = dest_addr.parse()
             .map_err(|e| IoError(format!("incorrect addr: {e}")))?;
 
         let conn_timeout_secs: Duration = Duration::from_secs(conn_timeout_secs as u64);
 
-        Ok(Self {
+        Ok(Arc::new(Self {
             common,
             dest_addr,
             conn_timeout_secs,
-        })
-    }
-}
-
-impl Side for TcpClientConfig {
-    type Config = TcpServerConfig;
-
-    fn common(config: Arc<Self::Config>) -> Arc<TcpCommonConfig> {
-        config.common.clone()
+        }))
     }
 }
 
@@ -84,6 +60,7 @@ pub struct TcpCommonConfig {
     pub(crate) buffers_capacity: usize,
     pub(crate) idle_timeout_secs: Duration,
     pub(crate) no_delay: bool,
+    pub(crate) instant_ack: bool,
     pub(crate) max_fragment_size: u16,
     pub(crate) sending_interval_nanosecs: Duration,
 }
@@ -93,6 +70,7 @@ impl TcpCommonConfig {
         buffers_capacity: usize,
         idle_timeout_secs: u16,
         no_delay: bool,
+        instant_ack: bool,
         max_fragment_size: u16,
         sending_interval_nanosecs: u16,
     ) -> Result<Arc<Self>, IoError> {
@@ -103,6 +81,7 @@ impl TcpCommonConfig {
             buffers_capacity,
             idle_timeout_secs,
             no_delay,
+            instant_ack,
             max_fragment_size,
             sending_interval_nanosecs,
         }))
